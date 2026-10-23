@@ -38,8 +38,8 @@ jobs:
               applicationId 'com.swipe.launcher'
               minSdk 24
               targetSdk 34
-              versionCode 6
-              versionName '2.4'
+              versionCode 8
+              versionName '2.6'
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -95,6 +95,7 @@ jobs:
           import android.widget.EditText
           import android.widget.FrameLayout
           import android.widget.GridView
+          import android.widget.HorizontalScrollView
           import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.ScrollView
@@ -120,7 +121,7 @@ jobs:
               private var lx = 0f; private var ly = 0f
               private var maxP = 0
 
-              private fun hideStatus() = mode == 0 && prefs.getBoolean("hide_status", true)
+              private fun hideStatus() = mode == 0 && prefs.getBoolean("hide_status", false)
               private fun hideNav() = prefs.getBoolean("hide_nav", true)
 
               override fun onCreate(b: Bundle?) {
@@ -199,7 +200,7 @@ jobs:
                               val d = if (abs(dx) > abs(dy)) (if (dx > 0) "right" else "left")
                                       else (if (dy > 0) "down" else "up")
                               val k = "${minOf(maxP, 2)}_$d"
-                              if (k == "1_up") showDrawer() else launch(k)
+                              if (k == "1_up") { dIdx = 0; showDrawer() } else launch(k)
                           }
                       }
                   }
@@ -254,8 +255,8 @@ jobs:
 
               private fun moveToFolder(pkg: String, n: String) {
                   for (f in folderNames()) {
-                      val a = folderApps(f)
-                      if (a.remove(pkg)) saveFolder(f, a)
+                      val o = folderApps(f)
+                      if (o.remove(pkg)) saveFolder(f, o)
                   }
                   val a = folderApps(n)
                   a.add(pkg)
@@ -318,40 +319,102 @@ jobs:
                   return g
               }
 
+              private var dIdx = 0
+
               private fun showDrawer() {
                   mode = 1
                   val pm = packageManager
+                  val tabs = ArrayList<String>()
+                  tabs.add("Application")
+                  tabs.addAll(folderNames())
+                  if (dIdx >= tabs.size || dIdx < 0) dIdx = 0
+                  val cur = tabs[dIdx]
+                  val set = folderApps(cur)
                   val inF = HashSet<String>()
                   for (f in folderNames()) inF.addAll(folderApps(f))
                   val items = ArrayList<Item>()
-                  for (f in folderNames()) items.add(Item(f, null, f, null))
                   for (r in allApps()) {
                       val pk = r.activityInfo.packageName
-                      if (!inF.contains(pk)) items.add(Item(r.loadLabel(pm).toString(), pk, null, r))
+                      if (if (dIdx == 0) !inF.contains(pk) else set.contains(pk)) items.add(Item(r.loadLabel(pm).toString(), pk, null, r))
                   }
-                  val grid = makeGrid(items, { it2 ->
-                      val f = it2.folder
-                      if (f != null) showFolder(f) else launchPkg(it2.pkg ?: "")
-                  }, { it2 ->
-                      val f = it2.folder
-                      if (f != null) {
-                          AlertDialog.Builder(this).setTitle("Folder '" + f + "' delete pannalama?")
-                              .setPositiveButton("Delete") { _, _ -> deleteFolder(f); showDrawer() }
-                              .setNegativeButton("Cancel", null).show()
-                      } else addToFolder(it2.pkg ?: "")
+                  val grid = makeGrid(items, { it2 -> launchPkg(it2.pkg ?: "") }, { it2 ->
+                      if (dIdx == 0) {
+                          addToFolder(it2.pkg ?: "")
+                      } else {
+                          AlertDialog.Builder(this).setTitle("Folder la irunthu eduka?")
+                              .setPositiveButton("Aama") { _, _ ->
+                                  val a = folderApps(cur); a.remove(it2.pkg ?: ""); saveFolder(cur, a)
+                                  showDrawer()
+                              }
+                              .setNegativeButton("Venaam", null).show()
+                      }
                   })
-                  grid.setPadding(16, 48, 16, 48)
-                  grid.setBackgroundColor(Color.argb(235, 0, 0, 0))
+                  grid.setPadding(16, 16, 16, 48)
+                  var gx = 0f
                   var gy = 0f
                   grid.setOnTouchListener { _, e ->
-                      if (e.action == MotionEvent.ACTION_DOWN) gy = e.y
-                      if (e.action == MotionEvent.ACTION_UP && e.y - gy > 250) {
-                          val c = grid.getChildAt(0)
-                          if (grid.firstVisiblePosition == 0 && (c == null || c.top >= grid.paddingTop)) showHome()
+                      if (e.action == MotionEvent.ACTION_DOWN) { gx = e.x; gy = e.y }
+                      if (e.action == MotionEvent.ACTION_UP) {
+                          val dx = e.x - gx
+                          val dy = e.y - gy
+                          if (abs(dx) > 200 && abs(dx) > abs(dy) * 1.5f) {
+                              if (dx < 0 && dIdx < tabs.size - 1) { dIdx++; showDrawer() }
+                              else if (dx > 0 && dIdx > 0) { dIdx--; showDrawer() }
+                          } else if (dy > 250 && abs(dy) > abs(dx)) {
+                              val c = grid.getChildAt(0)
+                              if (grid.firstVisiblePosition == 0 && (c == null || c.top >= grid.paddingTop)) showHome()
+                          }
                       }
                       false
                   }
-                  setContentView(grid)
+                  val row = LinearLayout(this)
+                  row.orientation = LinearLayout.HORIZONTAL
+                  for (i in tabs.indices) {
+                      val t = TextView(this)
+                      t.text = tabs[i]
+                      t.textSize = 18f
+                      t.setPadding(28, 20, 28, 20)
+                      if (i == dIdx) {
+                          t.setTextColor(Color.WHITE)
+                          t.setTypeface(null, android.graphics.Typeface.BOLD)
+                      } else {
+                          t.setTextColor(Color.GRAY)
+                      }
+                      t.setOnClickListener { dIdx = i; showDrawer() }
+                      if (i > 0) t.setOnLongClickListener {
+                          AlertDialog.Builder(this).setTitle("Folder '" + tabs[i] + "' delete pannalama?")
+                              .setPositiveButton("Delete") { _, _ -> deleteFolder(tabs[i]); dIdx = 0; showDrawer() }
+                              .setNegativeButton("Cancel", null).show()
+                          true
+                      }
+                      row.addView(t)
+                  }
+                  val plus = TextView(this)
+                  plus.text = "+"
+                  plus.textSize = 22f
+                  plus.setTextColor(Color.GRAY)
+                  plus.setPadding(28, 16, 28, 16)
+                  plus.setOnClickListener {
+                      askName { n -> newFolder(n); dIdx = folderNames().indexOf(n) + 1; showDrawer() }
+                  }
+                  row.addView(plus)
+                  val hs = HorizontalScrollView(this)
+                  hs.isHorizontalScrollBarEnabled = false
+                  hs.addView(row)
+                  val box = LinearLayout(this)
+                  box.orientation = LinearLayout.VERTICAL
+                  box.setBackgroundColor(Color.argb(235, 0, 0, 0))
+                  box.setPadding(0, 24, 0, 0)
+                  box.addView(hs)
+                  if (dIdx > 0 && items.isEmpty()) {
+                      val h = TextView(this)
+                      h.text = "Folder kaali. Application la app ah long press panni serkkavum."
+                      h.setTextColor(Color.GRAY)
+                      h.setPadding(32, 24, 32, 0)
+                      box.addView(h)
+                  }
+                  box.addView(grid, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                  setContentView(box)
                   hideBars()
               }
 
@@ -368,44 +431,6 @@ jobs:
                               askName { n -> newFolder(n); moveToFolder(pkg, n); showDrawer() }
                           }
                       }.show()
-              }
-
-              private fun showFolder(n: String) {
-                  mode = 3
-                  val pm = packageManager
-                  val set = folderApps(n)
-                  val items = allApps().filter { set.contains(it.activityInfo.packageName) }
-                      .map { Item(it.loadLabel(pm).toString(), it.activityInfo.packageName, null, it) }
-                  val g = makeGrid(items, { it2 -> launchPkg(it2.pkg ?: "") }, { it2 ->
-                      AlertDialog.Builder(this).setTitle("Folder la irunthu eduka?")
-                          .setPositiveButton("Aama") { _, _ ->
-                              val a = folderApps(n); a.remove(it2.pkg ?: ""); saveFolder(n, a)
-                              showFolder(n)
-                          }
-                          .setNegativeButton("Venaam", null).show()
-                  })
-                  g.setPadding(16, 16, 16, 48)
-                  var gy = 0f
-                  g.setOnTouchListener { _, e ->
-                      if (e.action == MotionEvent.ACTION_DOWN) gy = e.y
-                      if (e.action == MotionEvent.ACTION_UP && e.y - gy > 250) {
-                          val c = g.getChildAt(0)
-                          if (g.firstVisiblePosition == 0 && (c == null || c.top >= g.paddingTop)) showDrawer()
-                      }
-                      false
-                  }
-                  val t = TextView(this)
-                  t.text = "\uD83D\uDCC1 " + n
-                  t.setTextColor(Color.WHITE)
-                  t.textSize = 20f
-                  t.setPadding(32, 48, 32, 16)
-                  val box = LinearLayout(this)
-                  box.orientation = LinearLayout.VERTICAL
-                  box.setBackgroundColor(Color.argb(235, 0, 0, 0))
-                  box.addView(t)
-                  box.addView(g, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
-                  setContentView(box)
-                  hideBars()
               }
 
               private fun label(p: String?): String = try {
@@ -440,7 +465,7 @@ jobs:
                   box.orientation = LinearLayout.VERTICAL
                   box.setPadding(32, 96, 32, 64)
                   title(box, "Display")
-                  toggle(box, "hide_status", "Notification bar", true)
+                  toggle(box, "hide_status", "Notification bar", false)
                   toggle(box, "hide_nav", "Navigation buttons", true)
                   title(box, "Gestures (1 viral mela = App drawer)")
                   for ((k, name) in names) {
