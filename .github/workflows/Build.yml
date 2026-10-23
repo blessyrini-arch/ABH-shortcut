@@ -38,8 +38,8 @@ jobs:
               applicationId 'com.swipe.launcher'
               minSdk 24
               targetSdk 34
-              versionCode 2
-              versionName '2.0'
+              versionCode 5
+              versionName '2.3'
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -60,7 +60,7 @@ jobs:
               <activity android:name=".MainActivity"
                 android:exported="true"
                 android:launchMode="singleTask"
-                android:theme="@android:style/Theme.Wallpaper.NoTitleBar.Fullscreen">
+                android:theme="@android:style/Theme.Wallpaper.NoTitleBar">
                 <intent-filter>
                   <action android:name="android.intent.action.MAIN"/>
                   <category android:name="android.intent.category.LAUNCHER"/>
@@ -77,7 +77,9 @@ jobs:
           import android.app.Activity
           import android.app.AlertDialog
           import android.content.Intent
+          import android.content.pm.ResolveInfo
           import android.graphics.Color
+          import android.os.Build
           import android.os.Bundle
           import android.text.TextUtils
           import android.view.Gravity
@@ -85,17 +87,25 @@ jobs:
           import android.view.MotionEvent
           import android.view.View
           import android.view.ViewGroup
+          import android.view.WindowInsets
+          import android.view.WindowInsetsController
+          import android.view.WindowManager
           import android.widget.BaseAdapter
           import android.widget.Button
+          import android.widget.EditText
+          import android.widget.FrameLayout
           import android.widget.GridView
           import android.widget.ImageView
           import android.widget.LinearLayout
           import android.widget.ScrollView
           import android.widget.TextView
+          import android.widget.Toast
           import kotlin.math.abs
 
           class MainActivity : Activity() {
-              private val names = mapOf(
+              private class Item(val label: String, val pkg: String?, val folder: String?, val res: ResolveInfo?)
+
+              private val names = linkedMapOf(
                   "1_down" to "1 viral: Melirunthu keela",
                   "1_left" to "1 viral: Valathu -> Idathu",
                   "1_right" to "1 viral: Idathu -> Valathu",
@@ -110,9 +120,12 @@ jobs:
               private var lx = 0f; private var ly = 0f
               private var maxP = 0
 
+              private fun hideStatus() = prefs.getBoolean("hide_status", true)
+              private fun hideNav() = prefs.getBoolean("hide_nav", true)
+
               override fun onCreate(b: Bundle?) {
                   super.onCreate(b)
-                  showHome()
+                  if (prefs.all.isEmpty()) showSettings() else showHome()
               }
 
               override fun onNewIntent(i: Intent?) {
@@ -131,13 +144,23 @@ jobs:
 
               @Suppress("DEPRECATION")
               private fun hideBars() {
-                  window.decorView.systemUiVisibility =
-                      View.SYSTEM_UI_FLAG_LAYOUT_STABLE or
-                      View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or
-                      View.SYSTEM_UI_FLAG_FULLSCREEN or
-                      View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                  if (hideStatus()) window.addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                  else window.clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN)
+                  if (Build.VERSION.SDK_INT >= 30) {
+                      window.insetsController?.let {
+                          var t = 0
+                          if (hideStatus()) t = t or WindowInsets.Type.statusBars()
+                          if (hideNav()) t = t or WindowInsets.Type.navigationBars()
+                          it.show(WindowInsets.Type.systemBars())
+                          if (t != 0) it.hide(t)
+                          it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                      }
+                  } else {
+                      var f = View.SYSTEM_UI_FLAG_LAYOUT_STABLE or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+                      if (hideNav()) f = f or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+                      if (hideStatus()) f = f or View.SYSTEM_UI_FLAG_FULLSCREEN
+                      window.decorView.systemUiVisibility = f
+                  }
               }
 
               private fun showHome() {
@@ -172,7 +195,7 @@ jobs:
                       }
                       MotionEvent.ACTION_UP -> {
                           val dx = lx - sx; val dy = ly - sy
-                          if (maxOf(abs(dx), abs(dy)) > 120) {
+                          if (maxOf(abs(dx), abs(dy)) > 80) {
                               val d = if (abs(dx) > abs(dy)) (if (dx > 0) "right" else "left")
                                       else (if (dy > 0) "down" else "up")
                               val k = "${minOf(maxP, 2)}_$d"
@@ -182,51 +205,143 @@ jobs:
                   }
               }
 
-              private fun launch(k: String) {
-                  val p = prefs.getString(k, null) ?: return
+              private fun launchPkg(p: String) {
                   packageManager.getLaunchIntentForPackage(p)?.let { startActivity(it) }
               }
 
-              private fun showDrawer() {
-                  mode = 1
+              private fun launch(k: String) {
+                  val p = prefs.getString(k, null)
+                  if (p == null) {
+                      Toast.makeText(this, "Indha gesture ku app set pannala. Long press panni set pannunga", Toast.LENGTH_LONG).show()
+                      return
+                  }
+                  launchPkg(p)
+              }
+
+              private fun allApps(): List<ResolveInfo> {
                   val pm = packageManager
-                  val apps = pm.queryIntentActivities(
+                  return pm.queryIntentActivities(
                       Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
                       .filter { it.activityInfo.packageName != packageName }
                       .sortedBy { it.loadLabel(pm).toString().lowercase() }
-                  val grid = GridView(this)
-                  grid.numColumns = 4
-                  grid.setPadding(16, 96, 16, 48)
-                  grid.setBackgroundColor(Color.argb(235, 0, 0, 0))
-                  grid.adapter = object : BaseAdapter() {
-                      override fun getCount() = apps.size
-                      override fun getItem(p: Int) = apps[p]
+              }
+
+              private fun folderNames(): List<String> {
+                  val s: Set<String> = prefs.getStringSet("folders", null) ?: emptySet()
+                  return s.sorted()
+              }
+
+              private fun folderApps(n: String): HashSet<String> {
+                  val s: Set<String> = prefs.getStringSet("f_$n", null) ?: emptySet()
+                  return HashSet(s)
+              }
+
+              private fun saveFolder(n: String, s: Set<String>) {
+                  prefs.edit().putStringSet("f_$n", HashSet(s)).apply()
+              }
+
+              private fun newFolder(n: String) {
+                  val s = HashSet(folderNames())
+                  s.add(n)
+                  prefs.edit().putStringSet("folders", s).apply()
+              }
+
+              private fun deleteFolder(n: String) {
+                  val s = HashSet(folderNames())
+                  s.remove(n)
+                  prefs.edit().putStringSet("folders", s).remove("f_$n").apply()
+              }
+
+              private fun moveToFolder(pkg: String, n: String) {
+                  for (f in folderNames()) {
+                      val a = folderApps(f)
+                      if (a.remove(pkg)) saveFolder(f, a)
+                  }
+                  val a = folderApps(n)
+                  a.add(pkg)
+                  saveFolder(n, a)
+              }
+
+              private fun askName(cb: (String) -> Unit) {
+                  val e = EditText(this)
+                  AlertDialog.Builder(this)
+                      .setTitle("Folder peyar")
+                      .setView(e)
+                      .setPositiveButton("OK") { _, _ ->
+                          val n = e.text.toString().trim()
+                          if (n.isNotEmpty()) cb(n)
+                      }
+                      .setNegativeButton("Cancel", null)
+                      .show()
+              }
+
+              private fun makeGrid(items: List<Item>, onClick: (Item) -> Unit, onLong: (Item) -> Unit): GridView {
+                  val pm = packageManager
+                  val g = GridView(this)
+                  g.numColumns = 4
+                  g.adapter = object : BaseAdapter() {
+                      override fun getCount() = items.size
+                      override fun getItem(p: Int) = items[p]
                       override fun getItemId(p: Int) = p.toLong()
                       override fun getView(p: Int, cv: View?, parent: ViewGroup?): View {
-                          val a = apps[p]
+                          val a = items[p]
                           val l = LinearLayout(this@MainActivity)
                           l.orientation = LinearLayout.VERTICAL
                           l.gravity = Gravity.CENTER
                           l.setPadding(4, 24, 4, 24)
-                          val i = ImageView(this@MainActivity)
-                          i.setImageDrawable(a.loadIcon(pm))
-                          i.layoutParams = LinearLayout.LayoutParams(132, 132)
+                          val r = a.res
+                          if (r != null) {
+                              val i = ImageView(this@MainActivity)
+                              i.setImageDrawable(r.loadIcon(pm))
+                              i.layoutParams = LinearLayout.LayoutParams(132, 132)
+                              l.addView(i)
+                          } else {
+                              val e = TextView(this@MainActivity)
+                              e.text = "\uD83D\uDCC1"
+                              e.textSize = 36f
+                              e.gravity = Gravity.CENTER
+                              l.addView(e)
+                          }
                           val t = TextView(this@MainActivity)
-                          t.text = a.loadLabel(pm)
+                          t.text = a.label
                           t.setTextColor(Color.WHITE)
                           t.textSize = 12f
                           t.maxLines = 1
                           t.gravity = Gravity.CENTER
                           t.ellipsize = TextUtils.TruncateAt.END
-                          l.addView(i)
                           l.addView(t)
                           return l
                       }
                   }
-                  grid.setOnItemClickListener { _, _, pos, _ ->
-                      pm.getLaunchIntentForPackage(apps[pos].activityInfo.packageName)
-                          ?.let { startActivity(it) }
+                  g.setOnItemClickListener { _, _, p, _ -> onClick(items[p]) }
+                  g.setOnItemLongClickListener { _, _, p, _ -> onLong(items[p]); true }
+                  return g
+              }
+
+              private fun showDrawer() {
+                  mode = 1
+                  val pm = packageManager
+                  val inF = HashSet<String>()
+                  for (f in folderNames()) inF.addAll(folderApps(f))
+                  val items = ArrayList<Item>()
+                  for (f in folderNames()) items.add(Item(f, null, f, null))
+                  for (r in allApps()) {
+                      val pk = r.activityInfo.packageName
+                      if (!inF.contains(pk)) items.add(Item(r.loadLabel(pm).toString(), pk, null, r))
                   }
+                  val grid = makeGrid(items, { it2 ->
+                      val f = it2.folder
+                      if (f != null) showFolder(f) else launchPkg(it2.pkg ?: "")
+                  }, { it2 ->
+                      val f = it2.folder
+                      if (f != null) {
+                          AlertDialog.Builder(this).setTitle("Folder '" + f + "' delete pannalama?")
+                              .setPositiveButton("Delete") { _, _ -> deleteFolder(f); showDrawer() }
+                              .setNegativeButton("Cancel", null).show()
+                      } else addToFolder(it2.pkg ?: "")
+                  })
+                  grid.setPadding(16, 96, 16, 48)
+                  grid.setBackgroundColor(Color.argb(235, 0, 0, 0))
                   var gy = 0f
                   grid.setOnTouchListener { _, e ->
                       if (e.action == MotionEvent.ACTION_DOWN) gy = e.y
@@ -240,25 +355,102 @@ jobs:
                   hideBars()
               }
 
+              private fun addToFolder(pkg: String) {
+                  val fs = folderNames()
+                  val opts = ArrayList<String>(fs)
+                  opts.add("+ Puthu folder")
+                  AlertDialog.Builder(this)
+                      .setTitle("Entha folder la serkanum?")
+                      .setItems(opts.toTypedArray()) { _, i ->
+                          if (i < fs.size) {
+                              moveToFolder(pkg, fs[i]); showDrawer()
+                          } else {
+                              askName { n -> newFolder(n); moveToFolder(pkg, n); showDrawer() }
+                          }
+                      }.show()
+              }
+
+              private fun showFolder(n: String) {
+                  val pm = packageManager
+                  val set = folderApps(n)
+                  val items = allApps().filter { set.contains(it.activityInfo.packageName) }
+                      .map { Item(it.loadLabel(pm).toString(), it.activityInfo.packageName, null, it) }
+                  var dlg: AlertDialog? = null
+                  val g = makeGrid(items, { it2 ->
+                      dlg?.dismiss()
+                      launchPkg(it2.pkg ?: "")
+                  }, { it2 ->
+                      AlertDialog.Builder(this).setTitle("Folder la irunthu eduka?")
+                          .setPositiveButton("Aama") { _, _ ->
+                              val a = folderApps(n); a.remove(it2.pkg ?: ""); saveFolder(n, a)
+                              dlg?.dismiss(); showDrawer()
+                          }
+                          .setNegativeButton("Venaam", null).show()
+                  })
+                  val fl = FrameLayout(this)
+                  fl.addView(g, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 800))
+                  dlg = AlertDialog.Builder(this).setTitle(n).setView(fl)
+                      .setNegativeButton("Close", null).create()
+                  dlg.show()
+              }
+
               private fun label(p: String?): String = try {
                   if (p == null) "-" else packageManager.getApplicationInfo(p, 0).loadLabel(packageManager).toString()
               } catch (e: Exception) { "-" }
+
+              private fun title(box: LinearLayout, s: String) {
+                  val t = TextView(this)
+                  t.text = s
+                  t.setTextColor(Color.WHITE)
+                  t.textSize = 16f
+                  t.setPadding(0, 32, 0, 8)
+                  box.addView(t)
+              }
+
+              private fun toggle(box: LinearLayout, key: String, name: String, def: Boolean) {
+                  val b = Button(this)
+                  b.isAllCaps = false
+                  val on = prefs.getBoolean(key, def)
+                  b.text = name + ": " + (if (on) "Maraichu (hidden)" else "Kaattu (shown)")
+                  b.setOnClickListener {
+                      prefs.edit().putBoolean(key, !on).apply()
+                      hideBars()
+                      showSettings()
+                  }
+                  box.addView(b)
+              }
 
               private fun showSettings() {
                   mode = 2
                   val box = LinearLayout(this)
                   box.orientation = LinearLayout.VERTICAL
-                  box.setPadding(32, 96, 32, 32)
-                  val t = TextView(this)
-                  t.text = "Gesture settings - tap panni app select pannunga\n(1 viral mela = App drawer)"
-                  t.setTextColor(Color.WHITE)
-                  t.textSize = 18f
-                  box.addView(t)
+                  box.setPadding(32, 96, 32, 64)
+                  title(box, "Display")
+                  toggle(box, "hide_status", "Notification bar", true)
+                  toggle(box, "hide_nav", "Navigation buttons", true)
+                  title(box, "Gestures (1 viral mela = App drawer)")
                   for ((k, name) in names) {
                       val b = Button(this)
                       b.isAllCaps = false
                       b.text = name + "  =>  " + label(prefs.getString(k, null))
                       b.setOnClickListener { pick(k) }
+                      box.addView(b)
+                  }
+                  title(box, "Folders (App drawer la app ah long press panni serkalam)")
+                  val nf = Button(this)
+                  nf.isAllCaps = false
+                  nf.text = "+ Puthu folder"
+                  nf.setOnClickListener { askName { n -> newFolder(n); showSettings() } }
+                  box.addView(nf)
+                  for (f in folderNames()) {
+                      val b = Button(this)
+                      b.isAllCaps = false
+                      b.text = "Folder: " + f + " (" + folderApps(f).size + " apps) - delete panna tap"
+                      b.setOnClickListener {
+                          AlertDialog.Builder(this).setTitle("Folder '" + f + "' delete pannalama?")
+                              .setPositiveButton("Delete") { _, _ -> deleteFolder(f); showSettings() }
+                              .setNegativeButton("Cancel", null).show()
+                      }
                       box.addView(b)
                   }
                   val done = Button(this)
@@ -274,10 +466,7 @@ jobs:
 
               private fun pick(k: String) {
                   val pm = packageManager
-                  val apps = pm.queryIntentActivities(
-                      Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
-                      .filter { it.activityInfo.packageName != packageName }
-                      .sortedBy { it.loadLabel(pm).toString().lowercase() }
+                  val apps = allApps()
                   AlertDialog.Builder(this)
                       .setTitle(names[k])
                       .setItems(apps.map { it.loadLabel(pm).toString() }.toTypedArray()) { _, i ->
