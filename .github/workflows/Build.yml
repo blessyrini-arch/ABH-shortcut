@@ -38,8 +38,8 @@ jobs:
               applicationId 'com.swipe.launcher'
               minSdk 24
               targetSdk 34
-              versionCode 5
-              versionName '2.3'
+              versionCode 6
+              versionName '2.4'
             }
             compileOptions {
               sourceCompatibility JavaVersion.VERSION_17
@@ -120,7 +120,7 @@ jobs:
               private var lx = 0f; private var ly = 0f
               private var maxP = 0
 
-              private fun hideStatus() = prefs.getBoolean("hide_status", true)
+              private fun hideStatus() = mode == 0 && prefs.getBoolean("hide_status", true)
               private fun hideNav() = prefs.getBoolean("hide_nav", true)
 
               override fun onCreate(b: Bundle?) {
@@ -139,7 +139,7 @@ jobs:
               }
 
               override fun onBackPressed() {
-                  if (mode != 0) showHome()
+                  if (mode == 3) showDrawer() else if (mode != 0) showHome()
               }
 
               @Suppress("DEPRECATION")
@@ -340,7 +340,7 @@ jobs:
                               .setNegativeButton("Cancel", null).show()
                       } else addToFolder(it2.pkg ?: "")
                   })
-                  grid.setPadding(16, 96, 16, 48)
+                  grid.setPadding(16, 48, 16, 48)
                   grid.setBackgroundColor(Color.argb(235, 0, 0, 0))
                   var gy = 0f
                   grid.setOnTouchListener { _, e ->
@@ -371,27 +371,41 @@ jobs:
               }
 
               private fun showFolder(n: String) {
+                  mode = 3
                   val pm = packageManager
                   val set = folderApps(n)
                   val items = allApps().filter { set.contains(it.activityInfo.packageName) }
                       .map { Item(it.loadLabel(pm).toString(), it.activityInfo.packageName, null, it) }
-                  var dlg: AlertDialog? = null
-                  val g = makeGrid(items, { it2 ->
-                      dlg?.dismiss()
-                      launchPkg(it2.pkg ?: "")
-                  }, { it2 ->
+                  val g = makeGrid(items, { it2 -> launchPkg(it2.pkg ?: "") }, { it2 ->
                       AlertDialog.Builder(this).setTitle("Folder la irunthu eduka?")
                           .setPositiveButton("Aama") { _, _ ->
                               val a = folderApps(n); a.remove(it2.pkg ?: ""); saveFolder(n, a)
-                              dlg?.dismiss(); showDrawer()
+                              showFolder(n)
                           }
                           .setNegativeButton("Venaam", null).show()
                   })
-                  val fl = FrameLayout(this)
-                  fl.addView(g, FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, 800))
-                  dlg = AlertDialog.Builder(this).setTitle(n).setView(fl)
-                      .setNegativeButton("Close", null).create()
-                  dlg.show()
+                  g.setPadding(16, 16, 16, 48)
+                  var gy = 0f
+                  g.setOnTouchListener { _, e ->
+                      if (e.action == MotionEvent.ACTION_DOWN) gy = e.y
+                      if (e.action == MotionEvent.ACTION_UP && e.y - gy > 250) {
+                          val c = g.getChildAt(0)
+                          if (g.firstVisiblePosition == 0 && (c == null || c.top >= g.paddingTop)) showDrawer()
+                      }
+                      false
+                  }
+                  val t = TextView(this)
+                  t.text = "\uD83D\uDCC1 " + n
+                  t.setTextColor(Color.WHITE)
+                  t.textSize = 20f
+                  t.setPadding(32, 48, 32, 16)
+                  val box = LinearLayout(this)
+                  box.orientation = LinearLayout.VERTICAL
+                  box.setBackgroundColor(Color.argb(235, 0, 0, 0))
+                  box.addView(t)
+                  box.addView(g, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+                  setContentView(box)
+                  hideBars()
               }
 
               private fun label(p: String?): String = try {
